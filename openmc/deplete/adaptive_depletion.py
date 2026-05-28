@@ -21,7 +21,6 @@ vitaminj = openmc.mgxs.GROUP_STRUCTURES['VITAMIN-J-175']
 
 
 energy_groups = reduce(np.union1d, (magnox, shem, casmo, ecco, vitaminj))
-print(len(energy_groups))
 
 
 '''
