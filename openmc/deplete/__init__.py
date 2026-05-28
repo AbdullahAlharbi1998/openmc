@@ -5,6 +5,7 @@ openmc.deplete
 A depletion front-end tool.
 """
 
+from .adaptive_depletion import *
 from .nuclide import *
 from .chain import *
 from .openmc_operator import *

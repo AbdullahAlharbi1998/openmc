@@ -50,7 +50,9 @@ def get_microxs_and_flux(
     chain_file: PathLike | Chain | None = None,
     path_statepoint: PathLike | None = None,
     path_input: PathLike | None = None,
-    run_kwargs=None
+    run_kwargs=None,
+    material_id: int | None = None,
+    material_densities: dict | None = None,
 ) -> tuple[list[np.ndarray], list[MicroXS]]:
     """Generate microscopic cross sections and fluxes for multiple domains.
 
@@ -99,6 +101,26 @@ def get_microxs_and_flux(
         not kept.
     run_kwargs : dict, optional
         Keyword arguments passed to :meth:`openmc.Model.run`
+
+
+
+ADDED OPTIONAL PARAMETERS FOR ADAPTIVE DEPLETION:
+
+    material_id : int, optional
+        ID of the material whose composition should be overridden before the
+        transport solve. Must be provided together with ``material_densities``.
+        Ignored when ``material_densities`` is None.
+    material_densities : dict of str to float, optional
+        Flat dictionary mapping nuclide names (str) to **raw atom counts**
+        [atoms] for the material identified by ``material_id``. The function
+        converts these internally to atom/b-cm using the material volume read
+        from the C++ runtime after initialization:
+        ``atom_density = atoms / (volume_cm3 * 1e24)``.
+        Nuclides with zero or negative counts are silently skipped, consistent
+        with :meth:`IndependentOperator._update_materials`. When provided,
+        the function forces the in-memory C API execution path (initializing
+        the library if necessary). Both ``material_id`` and
+        ``material_densities`` must be supplied together. Default: None.
 
     Returns
     -------
@@ -161,14 +183,40 @@ def get_microxs_and_flux(
         rr_tally.scores = reactions
         model.tallies.append(rr_tally)
 
-    if openmc.lib.is_initialized:
-        openmc.lib.finalize()
+    # When the library is already initialized OR when the caller supplies
+    # material_densities to inject, we must use the explicit C API path:
+    # finalize any existing session, export XML, re-initialize, and then
+    # (if material_densities is given) update atom densities in C++ memory
+    # before the transport solve.  This mirrors the pattern used in
+    # CoupledOperator._update_materials() (coupled_operator.py L503-505).
+    if openmc.lib.is_initialized or material_densities is not None:
+        if openmc.lib.is_initialized:
+            openmc.lib.finalize()
 
         if comm.rank == 0:
             model.export_to_model_xml()
         comm.barrier()
-        # Reinitialize with tallies
+        # Reinitialize with the updated tallies (and model XML on disk)
         openmc.lib.init(intracomm=comm)
+
+        # Inject material compositions into C++ memory before transport runs.
+        # Zero and negative counts are skipped (same guard as _update_materials).
+        if material_densities is not None and material_id is not None:
+            lib_mat = openmc.lib.materials[material_id]
+            vol = lib_mat.volume  # cm3, available after init()
+            if vol is None:
+                raise ValueError(
+                    f"Material ID {material_id} has no volume set in the "
+                    "OpenMC C++ runtime. Set material.volume before "
+                    "calling this function"
+                )
+            nuc_list = []
+            dens_list = []
+            for nuc, count in material_densities.items():
+                if count > 0.0:            # mirror _update_materials guard
+                    nuc_list.append(nuc)
+                    dens_list.append(count / (vol * 1.0e24))
+            lib_mat.set_densities(nuc_list, dens_list)
 
     with TemporaryDirectory() as temp_dir:
         # Indicate to run in temporary directory unless being executed through
@@ -219,7 +267,7 @@ def get_microxs_and_flux(
         # Divide RR by flux to get microscopic cross sections. The indexing
         # ensures that only non-zero flux values are used, and broadcasting is
         # applied to align the shapes of reaction_rates and flux for division.
-        xs = np.empty_like(reaction_rates) # (domains, nuclides, reactions, groups)
+        xs = np.zeros_like(reaction_rates) # (domains, nuclides, reactions, groups)
         d, _, _, g = np.nonzero(flux)
         xs[d, ..., g] = reaction_rates[d, ..., g] / flux[d, :, :, g]
 

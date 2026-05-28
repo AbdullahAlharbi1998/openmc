@@ -875,11 +875,8 @@ class Integrator(ABC):
                 if output and comm.rank == 0:
                     print(f"[openmc.deplete] t={t} s, dt={dt} s, source={source_rate}")
 
-                # Solve transport equation (or obtain result from restart)
-                if i > 0 or self.operator.prev_res is None:
-                    n, res = self._get_bos_data_from_operator(i, source_rate, n)
-                else:
-                    n, res = self._get_bos_data_from_restart(source_rate, n)
+                # Solve transport equation
+                n, res = self._get_bos_data_from_operator(i, source_rate, n)
 
                 # Solve Bateman equations over time interval
                 proc_time, n_end = self(n, res.rates, dt, source_rate, i)

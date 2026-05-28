@@ -255,6 +255,14 @@ class CoupledOperator(OpenMCOperator):
         # Records how many times the operator has been called
         self._n_calls = 0
 
+        # Store the most recent reaction rates on a per-source basis
+        # ([(reactions/src)/atom]) prior to normalization to power or
+        # source rate. This is used by adaptive depletion schemes to
+        # recompute normalized reaction rates for new compositions
+        # between transport solves without running an additional
+        # transport calculation.
+        self._rates_per_source = None
+
         super().__init__(
             materials=model.materials,
             cross_sections=cross_sections,
